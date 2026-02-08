@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.DrowseyDriver1" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- Splash Thema (Android 12+) -->
+    <style name="Theme.DrowseyDriver1.Splash" parent="Theme.DrowseyDriver1">
+        <!-- Disable preview in launcher -->
+        <item name="android:windowDisablePreview">true</item>
+
+        <item name="postSplashScreenTheme">@style/Theme.DrowseyDriver1</item>
+    </style>
+
+</resources>
