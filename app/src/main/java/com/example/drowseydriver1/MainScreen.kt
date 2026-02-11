@@ -3,22 +3,30 @@ package com.example.drowseydriver1
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.OptIn
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.view.TransformExperimental
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.drowseydriver1.ui.theme.Purple80
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -29,6 +37,7 @@ data class DriverStatus(
     val detail2: String,
 )
 
+@OptIn(TransformExperimental::class)
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
@@ -50,8 +59,8 @@ fun MainScreen() {
         LifecycleCameraController(context).apply {
             cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
             setEnabledUseCases(
-                LifecycleCameraController.IMAGE_CAPTURE or
-                        LifecycleCameraController.VIDEO_CAPTURE or
+//                LifecycleCameraController.IMAGE_CAPTURE or
+//                        LifecycleCameraController.VIDEO_CAPTURE or
                         LifecycleCameraController.IMAGE_ANALYSIS
             )
             imageAnalysisBackpressureStrategy = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
@@ -65,6 +74,16 @@ fun MainScreen() {
             runCatching { cameraController.unbind() }
         }
     }
+    val previewView = remember{PreviewView(context).apply {
+            controller = cameraController
+            scaleType = PreviewView.ScaleType.FIT_CENTER
+        }
+    }
+    val facemeshAnalyzer = remember(previewView) { CameraAnalyzer(previewView) }
+
+    // for faceMash sample
+    //val points by facemashAnalyzer.pointsOnPreview.collectAsState()
+    val rois by facemeshAnalyzer.roisOnPreview.collectAsState()
 
     // Status UI state (replace these updates with your model output)
     var status by remember {
@@ -97,8 +116,16 @@ fun MainScreen() {
         )
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    LaunchedEffect(hasCameraPermission, facemeshAnalyzer) {
+        if (!hasCameraPermission) return@LaunchedEffect
 
+        cameraController.setImageAnalysisAnalyzer(
+            ContextCompat.getMainExecutor(context),
+            facemeshAnalyzer
+        )
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -119,15 +146,30 @@ fun MainScreen() {
                 shape = MaterialTheme.shapes.extraLarge
             ) {
                 if (hasCameraPermission) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
-                            PreviewView(ctx).apply {
-                                scaleType = PreviewView.ScaleType.FILL_CENTER
-                                controller = cameraController
+                    Box(Modifier.fillMaxSize()){
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { previewView }
+                        )
+                        Canvas(modifier = Modifier.matchParentSize()) {
+                            rois.forEach { r ->
+                                drawRect(
+                                    color = Purple80,
+                                    topLeft = Offset(r.left, r.top),
+                                    size = Size(r.width(), r.height()),
+                                    style = Stroke(width = 3f)
+                                )
                             }
+//                            for (i in points.indices step 1) {
+//                                val p = points[i]
+//                                drawCircle(
+//                                    color = BlueDots,
+//                                    radius = 3f,
+//                                    center = Offset(p.x, p.y)
+//                                )
+//                            }
                         }
-                    )
+                    }
                 } else {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("Camera permission required")

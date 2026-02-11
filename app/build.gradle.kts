@@ -62,4 +62,6 @@ dependencies {
     implementation(libs.camerax.lifecycle)
     implementation(libs.camerax.view)
 
+    implementation(libs.mlkit.face.mesh.detection)
+
 }
