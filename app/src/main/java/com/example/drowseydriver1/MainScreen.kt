@@ -64,6 +64,7 @@ fun MainScreen() {
                         LifecycleCameraController.IMAGE_ANALYSIS
             )
             imageAnalysisBackpressureStrategy = ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+//            imageAnalysisOutputImageFormat = ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888 // Will be used default YUV, to feed MLKit Facemesh
         }
     }
 
@@ -89,7 +90,7 @@ fun MainScreen() {
     var status by remember {
         mutableStateOf(
             DriverStatus(
-                label = "Normal",
+                label = "Awake",
                 confidence = 94,
                 detail1 = "Eyes closed for 0.3 sec",
                 detail2 = "Yawns 1 time in 3 minutes"
@@ -160,14 +161,6 @@ fun MainScreen() {
                                     style = Stroke(width = 3f)
                                 )
                             }
-//                            for (i in points.indices step 1) {
-//                                val p = points[i]
-//                                drawCircle(
-//                                    color = BlueDots,
-//                                    radius = 3f,
-//                                    center = Offset(p.x, p.y)
-//                                )
-//                            }
                         }
                     }
                 } else {

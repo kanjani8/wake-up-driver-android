@@ -22,13 +22,16 @@ The app estimates drowsiness using two on-device classifiers (eye open/closed, m
 ## App Screens
 #### Splash Screen
 ![Splash UI](assets/splash_light.png)
+
 Light Mode
 
 ![Splash UI](assets/splash_dark.png)
+
 Dark Mode
 
 #### Main Screen
 ![Main UI](assets/main_alert.png)
+
 Alert 
 
 ## How It Works
