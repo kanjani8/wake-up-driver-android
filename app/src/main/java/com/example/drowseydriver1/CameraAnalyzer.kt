@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 @TransformExperimental
 class CameraAnalyzer(
     private val previewView: PreviewView
-) : ImageAnalysis.Analyzer {
+) : ImageAnalysis.Analyzer{
     private val faceMeshDetector = FaceMeshDetection.getClient(
         FaceMeshDetectorOptions.Builder().setUseCase(FaceMeshDetectorOptions.FACE_MESH).build()
     )
@@ -38,6 +38,18 @@ class CameraAnalyzer(
     private val transformFactory = ImageProxyTransformFactory().apply {
         isUsingRotationDegrees = true
     }
+
+    // Schedule gate
+    private var lastLogMs = 0L
+
+    private var lastMeshMs = 0L
+    private var lastEyeMs = 0L
+    private var lastMouthMs = 0L
+
+    private val meshIntervalMs = 100L
+    private val eyeIntervalMs = 100L   // 0.1s
+    private val mouthIntervalMs = 200L // 0.2s
+
 
     @OptIn(TransformExperimental::class)
     @androidx.camera.core.ExperimentalGetImage
@@ -54,10 +66,28 @@ class CameraAnalyzer(
             return
         }
 
+        val now = android.os.SystemClock.elapsedRealtime()
+
+        val doMesh = (now - lastMeshMs) >= meshIntervalMs
+        if (!doMesh) {
+            isProcessing.set(false)
+            imageProxy.close()
+            return
+        }
+        lastMeshMs = now
+
+        //Frame rate checker
+//        val dt = if (lastLogMs == 0L) 0 else now - lastLogMs
+//        lastLogMs = now
+//        Log.d("AnalyzerRate", "analyze dt=${dt}ms rot=${imageProxy.imageInfo.rotationDegrees}")
+
+
         // Convert ImageProxy (camera frame) into ML Kit InputImage.
         // rotationDegrees is required so FaceMesh points are in the correct orientation.
         val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
 
+        // Processing time checker
+        val t0 = android.os.SystemClock.elapsedRealtime()
 
         // Pass image to an ML Kit Vision API
         faceMeshDetector.process(image)
@@ -66,6 +96,7 @@ class CameraAnalyzer(
 
                 val imageTransform: OutputTransform? = transformFactory.getOutputTransform(imageProxy)
                 val viewTransform: OutputTransform? = previewView.outputTransform
+
 
                 if (faceMesh == null ||
                     previewView.width == 0 || previewView.height == 0 ||
@@ -87,12 +118,13 @@ class CameraAnalyzer(
                 val leftEyePoints = faceMesh.getPoints(FaceMesh.LEFT_EYE)
                 val rightEyePoints = faceMesh.getPoints(FaceMesh.RIGHT_EYE)
 
-                val leftEyeRect = rectFrom(leftEyePoints, pad = 0.35f)?: run {
+                // 1.5f Padding because it is similar range with the training dataset
+                val leftEyeRect = rectFrom(leftEyePoints, pad = 1.5f)?: run {
                             _roisOnPreview.value = emptyList()
                             return@addOnSuccessListener
                         }
 
-                val rightEyeRect = rectFrom(rightEyePoints, pad = 0.35f)?: run {
+                val rightEyeRect = rectFrom(rightEyePoints, pad = 1.5f)?: run {
                     _roisOnPreview.value = emptyList()
                     return@addOnSuccessListener
                 }
@@ -103,18 +135,39 @@ class CameraAnalyzer(
                     addAll(faceMesh.getPoints(FaceMesh.LOWER_LIP_TOP))
                     addAll(faceMesh.getPoints(FaceMesh.LOWER_LIP_BOTTOM))
                 }
-                val mouthRect = rectFrom(mouthPts, pad = 0.50f)?: run {
+                val mouthRect = rectFrom(mouthPts, pad = 1.8f)?: run {
                     _roisOnPreview.value = emptyList()
                     return@addOnSuccessListener
                 }
-
-
+                //convert to draw box in previewView coords
                 val convLeftEyeRect = mapRect(leftEyeRect, coordinateTransform)
                 val convRightEyeRect = mapRect(rightEyeRect, coordinateTransform)
                 val convMouthRect = mapRect(mouthRect, coordinateTransform)
 
                 // Map ROI from ImageProxy coords -> PreviewView coords for drawing.
                 _roisOnPreview.value = listOf(convLeftEyeRect, convRightEyeRect, convMouthRect)
+
+                val now2 = android.os.SystemClock.elapsedRealtime()
+                val doEye = (now2 - lastEyeMs) >= eyeIntervalMs
+                val doMouth = (now2 - lastMouthMs) >= mouthIntervalMs
+
+                if (!doEye && !doMouth) return@addOnSuccessListener
+
+                if (doEye) {
+                    lastEyeMs = now2
+                    val leftEye = roiYuv420ToRgbChwUprightROI(imageProxy, leftEyeRect, outSize = 128)
+                    val rightEye = roiYuv420ToRgbChwUprightROI(imageProxy, rightEyeRect, outSize = 128)
+                    // classifier.classifyEyes(leftEye, rightEye)
+
+                    //Call DrowsiessTracker
+                }
+
+                if (doMouth) {
+                    lastMouthMs = now2
+                    val mouth = roiYuv420ToRgbChwUprightROI(imageProxy, mouthRect, outSize = 160)
+                    // classifier.classifyMouth(mouth)
+                    //Call DrowsiessTracker
+                }
 
             }
             .addOnFailureListener { e ->
@@ -124,6 +177,10 @@ class CameraAnalyzer(
             .addOnCompleteListener {
                 // Always close ImageProxy, otherwise CameraX pipeline stalls.
                 // Always release isProcessing in complete callback.
+
+                val t1 = android.os.SystemClock.elapsedRealtime()
+                Log.d("MeshTime", "faceMesh took ${t1 - t0}ms") // around 60ms
+
                 isProcessing.set(false)
                 imageProxy.close()
             }
@@ -136,6 +193,7 @@ class CameraAnalyzer(
         var minY = Float.POSITIVE_INFINITY
         var maxX = Float.NEGATIVE_INFINITY
         var maxY = Float.NEGATIVE_INFINITY
+
         for (p in points) {
             val x = p.position.x
             val y = p.position.y
@@ -146,11 +204,23 @@ class CameraAnalyzer(
         }
         val w = maxX - minX
         val h = maxY - minY
+
+        val Left = minX
+        val Top = minY
+        val Right = maxX
+        val Bottom = maxY
+
+        val cx = (Left + Right) * 0.5f
+        val cy = (Top + Bottom) * 0.5f
+
+        val size = maxOf(w, h) * (pad * 1.0f)
+        val half = size * 0.5f
+
         return RectF(
-            (minX - w * pad),
-            (minY - h * pad),
-            (maxX + w * pad),
-            (maxY + h * pad),
+            cx - half,
+            cy - half,
+            cx + half,
+            cy + half
         )
     }
 
