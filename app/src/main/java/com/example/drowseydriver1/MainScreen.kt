@@ -72,7 +72,7 @@ fun MainScreen() {
         if (hasCameraPermission) {
             cameraController.bindToLifecycle(lifecycleOwner)
         } else {
-            runCatching { cameraController.unbind() }
+            cameraController.clearImageAnalysisAnalyzer()
         }
     }
     val previewView = remember{PreviewView(context).apply {
@@ -182,6 +182,7 @@ fun MainScreen() {
             Text(status.detail2, style = MaterialTheme.typography.bodyLarge)
 
             Spacer(Modifier.height(24.dp))
+            DebugBitmapPreview(facemeshAnalyzer)
         }
 
         // In-app banner overlay (top)
@@ -232,3 +233,4 @@ private fun triggerBanner(
         onHide()
     }
 }
+

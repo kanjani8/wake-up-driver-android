@@ -1,5 +1,6 @@
 package com.example.drowseydriver1
 
+import android.graphics.Bitmap
 import android.graphics.RectF
 import android.util.Log
 import androidx.annotation.OptIn
@@ -17,6 +18,7 @@ import com.google.mlkit.vision.facemesh.FaceMeshDetectorOptions
 import com.google.mlkit.vision.facemesh.FaceMeshPoint
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
 
 
@@ -25,22 +27,25 @@ class CameraAnalyzer(
     private val previewView: PreviewView
 ) : ImageAnalysis.Analyzer{
     private val faceMeshDetector = FaceMeshDetection.getClient(
-        FaceMeshDetectorOptions.Builder().setUseCase(FaceMeshDetectorOptions.FACE_MESH).build()
+        FaceMeshDetectorOptions.Builder()
+            .setUseCase(FaceMeshDetectorOptions.FACE_MESH).build()
     )
 
     private val _roisOnPreview = MutableStateFlow<List<RectF>>(emptyList())
     val roisOnPreview: StateFlow<List<RectF>> = _roisOnPreview
 
-    // ML Kit FaceMesh runs asynchronously.
-    // Guard against overlapping frames: if we start processing a frame, drop the next ones
+    // 3) State for Debug   - For test cropped bitmap
+    private val _debugBitmap = MutableStateFlow<Bitmap?>(null)
+    val debugBitmap: StateFlow<Bitmap?> = _debugBitmap.asStateFlow()
+    private var debugCounter = 0
+
+    // ML Kit FaceMesh runs asynchronously
+    // if we start processing a frame, drop the next ones
     // until callbacks complete. This avoids backlog + stale UI updates.
     private val isProcessing = AtomicBoolean(false)
     private val transformFactory = ImageProxyTransformFactory().apply {
         isUsingRotationDegrees = true
     }
-
-    // Schedule gate
-    private var lastLogMs = 0L
 
     private var lastMeshMs = 0L
     private var lastEyeMs = 0L
@@ -86,10 +91,9 @@ class CameraAnalyzer(
         // rotationDegrees is required so FaceMesh points are in the correct orientation.
         val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
 
-        // Processing time checker
         val t0 = android.os.SystemClock.elapsedRealtime()
 
-        // Pass image to an ML Kit Vision API
+        //  (D) Run Face mesh asynchronous   - Pass image to an ML Kit Vision API
         faceMeshDetector.process(image)
             .addOnSuccessListener { faceMeshs ->
                 val faceMesh = faceMeshs.firstOrNull()
@@ -157,9 +161,18 @@ class CameraAnalyzer(
                     lastEyeMs = now2
                     val leftEye = roiYuv420ToRgbChwUprightROI(imageProxy, leftEyeRect, outSize = 128)
                     val rightEye = roiYuv420ToRgbChwUprightROI(imageProxy, rightEyeRect, outSize = 128)
+
+                    //Debug: Create cropped bitmap preview once in ten (super slow)
+                    debugCounter++
+                    if (debugCounter % 10 == 0) {
+                        leftEye?.let { _debugBitmap.value = chwNormalizedToBitmap(it, outSize = 128) }
+                    }
+
+                    //TODO:
                     // classifier.classifyEyes(leftEye, rightEye)
 
-                    //Call DrowsiessTracker
+                    //TODO:
+                    //Call DrowsinessTracker
                 }
 
                 if (doMouth) {
@@ -242,4 +255,37 @@ class CameraAnalyzer(
 
         return RectF(left, top, right, bottom)
     }
+}
+
+/* -------------------------------------------------------
+   Below: Debug utilities
+   ------------------------------------------------------- */
+
+// Reverse normalization From Frame Preprocessor adnn change it to Bitmap to check at the preview
+fun chwNormalizedToBitmap(
+chw: FloatArray,
+outSize: Int,
+mean: FloatArray = floatArrayOf(0.485f, 0.456f, 0.406f),
+std:  FloatArray = floatArrayOf(0.229f, 0.224f, 0.225f),
+): Bitmap {
+    val hw = outSize * outSize
+    require(chw.size >= 3 * hw)
+
+    val pixels = IntArray(hw)
+
+    fun denorm(v: Float, c: Int): Float = v * std[c] + mean[c] // back to 0..1
+
+    for (i in 0 until hw) {
+        val r01 = denorm(chw[i], 0).coerceIn(0f, 1f)
+        val g01 = denorm(chw[hw + i], 1).coerceIn(0f, 1f)
+        val b01 = denorm(chw[2 * hw + i], 2).coerceIn(0f, 1f)
+
+        val r = (r01 * 255f).toInt().coerceIn(0, 255)
+        val g = (g01 * 255f).toInt().coerceIn(0, 255)
+        val b = (b01 * 255f).toInt().coerceIn(0, 255)
+
+        pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+    }
+
+    return Bitmap.createBitmap(pixels, outSize, outSize, Bitmap.Config.ARGB_8888)
 }
