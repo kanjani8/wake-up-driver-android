@@ -2,8 +2,10 @@ package com.example.drowseydriver1
 
 import android.graphics.Bitmap
 import android.graphics.RectF
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
+import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.view.PreviewView
@@ -21,32 +23,41 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
 
-
 @TransformExperimental
 class CameraAnalyzer(
     private val previewView: PreviewView
 ) : ImageAnalysis.Analyzer{
+
+    // 1) ML Kit FaceMesh detector
     private val faceMeshDetector = FaceMeshDetection.getClient(
         FaceMeshDetectorOptions.Builder()
             .setUseCase(FaceMeshDetectorOptions.FACE_MESH).build()
     )
 
+    // 2) State(상태) for Preview
     private val _roisOnPreview = MutableStateFlow<List<RectF>>(emptyList())
-    val roisOnPreview: StateFlow<List<RectF>> = _roisOnPreview
+    val roisOnPreview: StateFlow<List<RectF>> = _roisOnPreview.asStateFlow()
+
 
     // 3) State for Debug   - For test cropped bitmap
     private val _debugBitmap = MutableStateFlow<Bitmap?>(null)
     val debugBitmap: StateFlow<Bitmap?> = _debugBitmap.asStateFlow()
     private var debugCounter = 0
 
+
+    // 4) Guard against overlapping frames:
+
     // ML Kit FaceMesh runs asynchronously
     // if we start processing a frame, drop the next ones
     // until callbacks complete. This avoids backlog + stale UI updates.
     private val isProcessing = AtomicBoolean(false)
+
+    // 5) ImageProxy -> PreviewView 좌표 변환 도구
     private val transformFactory = ImageProxyTransformFactory().apply {
         isUsingRotationDegrees = true
     }
 
+    // 6) 실행 주기 제한(성능용)
     private var lastMeshMs = 0L
     private var lastEyeMs = 0L
     private var lastMouthMs = 0L
@@ -56,23 +67,28 @@ class CameraAnalyzer(
     private val mouthIntervalMs = 200L // 0.2s
 
 
+    // -------------------------
+    // Main entry
+    // -------------------------
+
     @OptIn(TransformExperimental::class)
-    @androidx.camera.core.ExperimentalGetImage
+    @ExperimentalGetImage
     override fun analyze(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image
         if(mediaImage == null) {
             imageProxy.close()
             return
         }
-        // Avoid Asynchronous Duplicate Processing
+        // (A) Avoid Asynchronous Duplicate Processing
         // false -> true  / true -> discard
         if (!isProcessing.compareAndSet(false, true)) {
             imageProxy.close()
             return
         }
 
-        val now = android.os.SystemClock.elapsedRealtime()
+        val now = SystemClock.elapsedRealtime()
 
+        // (B) Run Mesh only once per interval
         val doMesh = (now - lastMeshMs) >= meshIntervalMs
         if (!doMesh) {
             isProcessing.set(false)
@@ -81,23 +97,20 @@ class CameraAnalyzer(
         }
         lastMeshMs = now
 
-        //Frame rate checker
-//        val dt = if (lastLogMs == 0L) 0 else now - lastLogMs
-//        lastLogMs = now
-//        Log.d("AnalyzerRate", "analyze dt=${dt}ms rot=${imageProxy.imageInfo.rotationDegrees}")
 
-
-        // Convert ImageProxy (camera frame) into ML Kit InputImage.
+        //(C)  Convert ImageProxy (camera frame) into ML Kit InputImage.
         // rotationDegrees is required so FaceMesh points are in the correct orientation.
         val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
 
-        val t0 = android.os.SystemClock.elapsedRealtime()
+        val t0 = SystemClock.elapsedRealtime()
 
         //  (D) Run Face mesh asynchronous   - Pass image to an ML Kit Vision API
         faceMeshDetector.process(image)
-            .addOnSuccessListener { faceMeshs ->
-                val faceMesh = faceMeshs.firstOrNull()
+            .addOnSuccessListener { faceMeshes ->
+                val faceMesh = faceMeshes.firstOrNull()
 
+
+                // ----------D-0 Basic validity check-----------------
                 val imageTransform: OutputTransform? = transformFactory.getOutputTransform(imageProxy)
                 val viewTransform: OutputTransform? = previewView.outputTransform
 
@@ -110,12 +123,16 @@ class CameraAnalyzer(
                     return@addOnSuccessListener
                 }
 
+                // ---------- (D-1) Preparing for coordinate transformation ----------
+
                 // CameraX coordinate mapping:
                 // FaceMesh points are in ImageProxy coordinates,
                 // but our overlay Canvas draws in PreviewView coordinates.
                 // CoordinateTransform maps between the two.
                 val coordinateTransform = CoordinateTransform(imageTransform, viewTransform)
 
+
+                // ---------- (D-2) Calculate ROI (ImageProxy Coordinates) ----------
 
                 // ROI rectangles are computed from FaceMesh contour points (LEFT_EYE / RIGHT_EYE / lips).
                 // These rects are still in ImageProxy coordinates at this moment.
@@ -143,6 +160,8 @@ class CameraAnalyzer(
                     _roisOnPreview.value = emptyList()
                     return@addOnSuccessListener
                 }
+
+                // ---------- (D-3) Convert into PreviewView Coordinates----------
                 //convert to draw box in previewView coords
                 val convLeftEyeRect = mapRect(leftEyeRect, coordinateTransform)
                 val convRightEyeRect = mapRect(rightEyeRect, coordinateTransform)
@@ -151,7 +170,9 @@ class CameraAnalyzer(
                 // Map ROI from ImageProxy coords -> PreviewView coords for drawing.
                 _roisOnPreview.value = listOf(convLeftEyeRect, convRightEyeRect, convMouthRect)
 
-                val now2 = android.os.SystemClock.elapsedRealtime()
+
+                // ---------- (D-4) Generate model inputs (rate-limited) + optional debug preview ----------
+                val now2 = SystemClock.elapsedRealtime()
                 val doEye = (now2 - lastEyeMs) >= eyeIntervalMs
                 val doMouth = (now2 - lastMouthMs) >= mouthIntervalMs
 
@@ -159,28 +180,37 @@ class CameraAnalyzer(
 
                 if (doEye) {
                     lastEyeMs = now2
+
+                    // Generating the actual model input tensor
+                    // Note: roiYuv420ToRgbChwUprightROI may return null if ImageProxy.image is null.
                     val leftEye = roiYuv420ToRgbChwUprightROI(imageProxy, leftEyeRect, outSize = 128)
                     val rightEye = roiYuv420ToRgbChwUprightROI(imageProxy, rightEyeRect, outSize = 128)
 
-                    //Debug: Create cropped bitmap preview once in ten (super slow)
+                    //Debug: Convert the *actual model input tensor* back to a Bitmap.
+                    // This is intentionally slow; run once every N frames.
                     debugCounter++
                     if (debugCounter % 10 == 0) {
                         leftEye?.let { _debugBitmap.value = chwNormalizedToBitmap(it, outSize = 128) }
                     }
 
-                    //TODO:
-                    // classifier.classifyEyes(leftEye, rightEye)
 
                     //TODO:
-                    //Call DrowsinessTracker
+                    // - classifier.classifyEyes(leftEye, rightEye)
+                    // - Call DrowsinessTracker
+
                 }
 
                 if (doMouth) {
                     lastMouthMs = now2
                     val mouth = roiYuv420ToRgbChwUprightROI(imageProxy, mouthRect, outSize = 160)
-                    // classifier.classifyMouth(mouth)
-                    //Call DrowsiessTracker
+
+                    //TODO:
+                    // - classifier.classifyMouth(mouth)
+                    // - Call DrowsinessTracker
                 }
+
+                // Note: isProcessing is released in addOnCompleteListener,
+                //      so we must avoid calling imageProxy.close() inside success path.
 
             }
             .addOnFailureListener { e ->
@@ -191,7 +221,7 @@ class CameraAnalyzer(
                 // Always close ImageProxy, otherwise CameraX pipeline stalls.
                 // Always release isProcessing in complete callback.
 
-                val t1 = android.os.SystemClock.elapsedRealtime()
+                val t1 = SystemClock.elapsedRealtime()
                 Log.d("MeshTime", "faceMesh took ${t1 - t0}ms") // around 60ms
 
                 isProcessing.set(false)
@@ -199,6 +229,9 @@ class CameraAnalyzer(
             }
     }
 
+    /**
+     * FaceMesh points -> Square ROI
+     */
     private fun rectFrom(points: List<FaceMeshPoint>, pad: Float): RectF? {
         if (points.isEmpty()) return null
 
@@ -237,6 +270,9 @@ class CameraAnalyzer(
         )
     }
 
+    /**
+     * ImageProxy rect coords ->  PreviewView Rect coords
+     */
     @OptIn(TransformExperimental::class)
     private fun mapRect(bbox: RectF, ct: CoordinateTransform): RectF {
         // 4 corners
@@ -261,12 +297,17 @@ class CameraAnalyzer(
    Below: Debug utilities
    ------------------------------------------------------- */
 
-// Reverse normalization From Frame Preprocessor adnn change it to Bitmap to check at the preview
+/**
+ * Debug helper:
+ * - Takes a normalized RGB CHW tensor (same as model input) and converts it back to a Bitmap.
+ * - Performs de-normalization: x * std + mean, then maps [0,1] -> [0,255].
+ * - Useful to visually verify that ROI crop + rotation + channel order + normalization are correct.
+ */
 fun chwNormalizedToBitmap(
-chw: FloatArray,
-outSize: Int,
-mean: FloatArray = floatArrayOf(0.485f, 0.456f, 0.406f),
-std:  FloatArray = floatArrayOf(0.229f, 0.224f, 0.225f),
+    chw: FloatArray,
+    outSize: Int,
+    mean: FloatArray = floatArrayOf(0.485f, 0.456f, 0.406f),
+    std:  FloatArray = floatArrayOf(0.229f, 0.224f, 0.225f),
 ): Bitmap {
     val hw = outSize * outSize
     require(chw.size >= 3 * hw)
