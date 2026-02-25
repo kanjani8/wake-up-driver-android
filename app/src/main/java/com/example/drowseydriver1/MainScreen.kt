@@ -24,11 +24,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.drowseydriver1.ui.theme.Purple80
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.concurrent.Executors
 
 data class DriverStatus(
     val label: String,
@@ -43,6 +43,7 @@ fun MainScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
+    val backgroundExecutor = remember { Executors.newSingleThreadExecutor() }
 
     // Camera permission
     var hasCameraPermission by remember { mutableStateOf(false) }
@@ -80,7 +81,7 @@ fun MainScreen() {
             scaleType = PreviewView.ScaleType.FIT_CENTER
         }
     }
-    val facemeshAnalyzer = remember(previewView) { CameraAnalyzer(previewView) }
+    val facemeshAnalyzer = remember(previewView) { CameraAnalyzer(context, previewView) }
 
     // for faceMash sample
     //val points by facemashAnalyzer.pointsOnPreview.collectAsState()
@@ -121,7 +122,7 @@ fun MainScreen() {
         if (!hasCameraPermission) return@LaunchedEffect
 
         cameraController.setImageAnalysisAnalyzer(
-            ContextCompat.getMainExecutor(context),
+            backgroundExecutor,
             facemeshAnalyzer
         )
     }

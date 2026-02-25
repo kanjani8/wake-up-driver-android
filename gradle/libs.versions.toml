@@ -1,5 +1,5 @@
 [versions]
-agp = "9.0.0"
+agp = "9.0.1"
 coreKtx = "1.17.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
@@ -12,6 +12,7 @@ camerax = "1.5.3"
 nav = "2.9.7"
 splashScreen = "1.0.1"
 mlkit= "16.0.0-beta3"
+executorch="1.1.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -39,6 +40,8 @@ camerax-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref =
 camerax-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
 
 mlkit-face-mesh-detection = { module = "com.google.mlkit:face-mesh-detection", version.ref = "mlkit" }
+
+executorch-android = { module = "org.pytorch:executorch-android", version.ref = "executorch" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

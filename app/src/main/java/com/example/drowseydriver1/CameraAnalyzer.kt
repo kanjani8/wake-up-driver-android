@@ -1,5 +1,6 @@
 package com.example.drowseydriver1
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.RectF
 import android.os.SystemClock
@@ -18,13 +19,20 @@ import com.google.mlkit.vision.facemesh.FaceMesh
 import com.google.mlkit.vision.facemesh.FaceMeshDetection
 import com.google.mlkit.vision.facemesh.FaceMeshDetectorOptions
 import com.google.mlkit.vision.facemesh.FaceMeshPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import org.pytorch.executorch.Module
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 @TransformExperimental
 class CameraAnalyzer(
+    private val context: Context,
     private val previewView: PreviewView
 ) : ImageAnalysis.Analyzer{
 
@@ -52,7 +60,7 @@ class CameraAnalyzer(
     // until callbacks complete. This avoids backlog + stale UI updates.
     private val isProcessing = AtomicBoolean(false)
 
-    // 5) ImageProxy -> PreviewView 좌표 변환 도구
+    // 5) ImageProxy -> PreviewView Transform
     private val transformFactory = ImageProxyTransformFactory().apply {
         isUsingRotationDegrees = true
     }
@@ -66,6 +74,32 @@ class CameraAnalyzer(
     private val eyeIntervalMs = 100L   // 0.1s
     private val mouthIntervalMs = 200L // 0.2s
 
+    // 7) Classification Labels
+    interface FaceState {
+        val isWarningNeeded: Boolean
+    }
+
+    enum class EyeState(override val isWarningNeeded: Boolean) : FaceState {
+        OPEN(false),
+        CLOSED(true)
+    }
+
+    enum class MouthState(override val isWarningNeeded: Boolean) : FaceState {
+        NO_YAWN(false),
+        YAWN(true)
+    }
+
+    // 8) Classification Models
+    private val eyeModelPath: String by lazy {
+        getAssetFilePath(context, "eye_model.pte")
+    }
+
+    private val eyeModel = Module.load(eyeModelPath)
+
+    private val mouthModelPath: String by lazy {
+        getAssetFilePath(context, "mouth_model.pte")
+    }
+    private val mouthModel = Module.load(mouthModelPath)
 
     // -------------------------
     // Main entry
@@ -119,7 +153,9 @@ class CameraAnalyzer(
                     previewView.width == 0 || previewView.height == 0 ||
                     imageTransform == null || viewTransform == null
                 ) {
+                    isProcessing.set(false)
                     _roisOnPreview.value = emptyList()
+                    imageProxy.close()
                     return@addOnSuccessListener
                 }
 
@@ -176,57 +212,94 @@ class CameraAnalyzer(
                 val doEye = (now2 - lastEyeMs) >= eyeIntervalMs
                 val doMouth = (now2 - lastMouthMs) >= mouthIntervalMs
 
-                if (!doEye && !doMouth) return@addOnSuccessListener
+                if (!doEye && !doMouth){
+                    isProcessing.set(false)
+                    imageProxy.close()
+                    return@addOnSuccessListener
+                }
 
-                if (doEye) {
-                    lastEyeMs = now2
+                CoroutineScope(Dispatchers.Default).launch { // background processing
+                    try {
+                        if (doEye) {
+                            lastEyeMs = now2
 
-                    // Generating the actual model input tensor
-                    // Note: roiYuv420ToRgbChwUprightROI may return null if ImageProxy.image is null.
-                    val leftEye = roiYuv420ToRgbChwUprightROI(imageProxy, leftEyeRect, outSize = 128)
-                    val rightEye = roiYuv420ToRgbChwUprightROI(imageProxy, rightEyeRect, outSize = 128)
+                            // Generating the actual model input tensor
+                            // Note: roiYuv420ToRgbChwUprightROI may return null if ImageProxy.image is null.
+                            val leftEye = roiYuv420ToRgbChwUprightROI(imageProxy, leftEyeRect, outSize = 128) ?: return@launch
+                             val rightEye = roiYuv420ToRgbChwUprightROI(imageProxy, rightEyeRect, outSize = 128) ?: return@launch
+                            //Debug: Convert the *actual model input tensor* back to a Bitmap.
+                            // This is intentionally slow; run once every N frames.
+                            debugCounter++
+                            if (debugCounter % 10 == 0) {
+                                leftEye?.let { _debugBitmap.value = chwNormalizedToBitmap(it, outSize = 128) }
+                            }
 
-                    //Debug: Convert the *actual model input tensor* back to a Bitmap.
-                    // This is intentionally slow; run once every N frames.
-                    debugCounter++
-                    if (debugCounter % 10 == 0) {
-                        leftEye?.let { _debugBitmap.value = chwNormalizedToBitmap(it, outSize = 128) }
+                            // Classify
+                            val eyeResult1 =
+                            executorchBinaryClassifier(
+                                eyeModel, EyeState.entries, 128, leftEye
+                            )
+                            Log.d("faceResult", "eyeResult1:  ${eyeResult1}")
+                            if(eyeResult1 == EyeState.CLOSED){
+                                val eyeResult2 =
+                                    executorchBinaryClassifier(
+                                        eyeModel, EyeState.entries, 128, rightEye
+                                    )
+                            }
+
+
+
+                            //TODO:
+                            // - Call DrowsinessTracker
+
+                        }
+
+                        if (doMouth) {
+                            lastMouthMs = now2
+                            val mouth =
+                                roiYuv420ToRgbChwUprightROI(imageProxy, mouthRect, outSize = 160)?: return@launch
+
+                            val mouthResult =
+                                executorchBinaryClassifier(
+                                    mouthModel, MouthState.entries, 160, mouth
+                                );
+
+                            Log.d("faceResult", "mouthResult:  ${mouthResult}")
+
+                                    //TODO:
+                                    // - Call DrowsinessTracker
+                        }
+                    } finally{
+                        isProcessing.set(false)
+                        imageProxy.close()
                     }
-
-
-                    //TODO:
-                    // - classifier.classifyEyes(leftEye, rightEye)
-                    // - Call DrowsinessTracker
-
                 }
-
-                if (doMouth) {
-                    lastMouthMs = now2
-                    val mouth = roiYuv420ToRgbChwUprightROI(imageProxy, mouthRect, outSize = 160)
-
-                    //TODO:
-                    // - classifier.classifyMouth(mouth)
-                    // - Call DrowsinessTracker
-                }
-
-                // Note: isProcessing is released in addOnCompleteListener,
-                //      so we must avoid calling imageProxy.close() inside success path.
-
             }
             .addOnFailureListener { e ->
                 Log.e("CameraAnalyzer", "FaceMesh error", e)
                 _roisOnPreview.value = emptyList()
             }
-            .addOnCompleteListener {
-                // Always close ImageProxy, otherwise CameraX pipeline stalls.
-                // Always release isProcessing in complete callback.
+    }
 
-                val t1 = SystemClock.elapsedRealtime()
-                Log.d("MeshTime", "faceMesh took ${t1 - t0}ms") // around 60ms
-
-                isProcessing.set(false)
-                imageProxy.close()
+    /**
+     * Get Asset File Path
+     */
+    fun getAssetFilePath(context: Context, assetName: String): String {
+        val file = File(context.filesDir, assetName)
+        if (file.exists() && file.length() > 0) {
+            return file.absolutePath
+        }
+        context.assets.open(assetName).use { inputStream ->
+            FileOutputStream(file).use { outputStream ->
+                val buffer = ByteArray(4 * 1024)
+                var read: Int
+                while (inputStream.read(buffer).also { read = it } != -1) {
+                    outputStream.write(buffer, 0, read)
+                }
+                outputStream.flush()
             }
+        }
+        return file.absolutePath
     }
 
     /**
