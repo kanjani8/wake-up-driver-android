@@ -132,9 +132,9 @@ fun roiYuv420ToRgbChwUprightROI(
             g = g.coerceIn(0f, 255f)
             b = b.coerceIn(0f, 255f)
 
-            var rf = (r / 255f - norm.mean[0]) / norm.std[0]
-            var gf = (g / 255f - norm.mean[1]) / norm.std[1]
-            var bf = (b / 255f - norm.mean[2]) / norm.std[2]
+            val rf = (r / 255f - norm.mean[0]) / norm.std[0]
+            val gf = (g / 255f - norm.mean[1]) / norm.std[1]
+            val bf = (b / 255f - norm.mean[2]) / norm.std[2]
 
             val i = oy * outSize + ox
             out[0 * planeSize + i] = rf

@@ -5,9 +5,14 @@ plugins {
 
 android {
     namespace = "com.example.drowseydriver1"
+    androidResources {
+        noCompress.add("pte")
+    }
+
     compileSdk {
         version = release(36)
     }
+
 
     defaultConfig {
         applicationId = "com.example.drowseydriver1"
@@ -64,5 +69,6 @@ dependencies {
     implementation(libs.camerax.view)
 
     implementation(libs.mlkit.face.mesh.detection)
+    implementation(libs.executorch.android)
 
 }
