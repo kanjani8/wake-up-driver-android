@@ -101,6 +101,12 @@ class CameraAnalyzer(
     }
     private val mouthModel = Module.load(mouthModelPath)
 
+    // 9) DrowsinessTracker & State for DrowsinessTracker
+
+    private val drowsinessTracker = DrowsinessTracker()
+    private val _drowsinessState = MutableStateFlow<DrowsinessState>(DrowsinessState(UserState.AWAKE, 0, 0, 0.0f,false))
+    val drowsinessState: StateFlow<DrowsinessState> = _drowsinessState.asStateFlow()
+
     // -------------------------
     // Main entry
     // -------------------------
@@ -135,8 +141,6 @@ class CameraAnalyzer(
         //(C)  Convert ImageProxy (camera frame) into ML Kit InputImage.
         // rotationDegrees is required so FaceMesh points are in the correct orientation.
         val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-
-        val t0 = SystemClock.elapsedRealtime()
 
         //  (D) Run Face mesh asynchronous   - Pass image to an ML Kit Vision API
         faceMeshDetector.process(image)
@@ -245,12 +249,11 @@ class CameraAnalyzer(
                                     executorchBinaryClassifier(
                                         eyeModel, EyeState.entries, 128, rightEye
                                     )
+
+                                _drowsinessState.value = drowsinessTracker.trackEyes(eyeResult2)
+                            }else{
+                                _drowsinessState.value =  drowsinessTracker.trackEyes(eyeResult1)
                             }
-
-
-
-                            //TODO:
-                            // - Call DrowsinessTracker
 
                         }
 
@@ -265,9 +268,7 @@ class CameraAnalyzer(
                                 );
 
                             Log.d("faceResult", "mouthResult:  ${mouthResult}")
-
-                                    //TODO:
-                                    // - Call DrowsinessTracker
+                            _drowsinessState.value = drowsinessTracker.trackMouth(mouthResult)
                         }
                     } finally{
                         isProcessing.set(false)
