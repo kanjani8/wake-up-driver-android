@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">Drowsey Driver</string>
+
+    <string name="app_title">運転者状態チェッカー</string>
+    <string name="banner_alert">眠気を検知しました — 休憩をとってください。</string>
+
+    <string name="state_awake">覚醒</string>
+    <string name="state_sleep">睡眠</string>
+    <string name="state_drowsy">眠気</string>
+
+    <string name="status_format">%1$s %2$d%%</string>
+    <string name="detail_eyes_closed">%.1f秒間目を閉じています</string>
+    <string name="detail_yawns">3分間に%1$d回あくびをしました</string>
+</resources>

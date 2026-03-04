@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Drowsey Driver</string>
+    <string name="app_title">운전자 상태 확인</string>
+    <string name="banner_alert">졸음 감지됨 — 휴식을 취해주세요.</string>
+
+    <string name="state_awake">깨어있음</string>
+    <string name="state_sleep">수면</string>
+    <string name="state_drowsy">졸음</string>
+
+    <string name="status_format">%1$s %2$d%%</string>
+    <string name="detail_eyes_closed">%.1f초 동안 눈을 감음</string>
+    <string name="detail_yawns">3분 동안 하품 %1$d회</string>
+</resources>
