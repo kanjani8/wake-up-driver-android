@@ -47,6 +47,13 @@ class DrowsinessTracker{
     fun trackEyes(status: CameraAnalyzer.FaceState): DrowsinessState {
 
         val now = SystemClock.elapsedRealtime()
+        if (lastEyeCheckMs == 0L) {
+            lastEyeCheckMs = now
+        }
+
+        val deltaMs = now - lastEyeCheckMs
+        lastEyeCheckMs = now
+
         if(status == CameraAnalyzer.EyeState.CLOSED){
             if(isEyeOpened){
                 isEyeOpened = false;
@@ -61,7 +68,7 @@ class DrowsinessTracker{
                 lastEyeCheckMs = now
 
                 // get a new drowsiness percentage
-                val addedScore = 3.0f * (deltaMs / 1000.0f)
+                val addedScore = 0.6f * (deltaMs / 1000.0f)
                 var newPercent = state.drowsinessPercent + addedScore
 
                 if (totalClosedMs > DROWSY_EYES_CLOSED_MS && newPercent <= 50.0f) {
@@ -86,10 +93,11 @@ class DrowsinessTracker{
 
         } else if(status == CameraAnalyzer.EyeState.OPEN){
             isEyeOpened = true
+            val reducedScore = 5.0f * (deltaMs / 1000.0f)
             state = state.copy(
                 isSleeping = false,
                 eyesClosedMs = 0,
-                drowsinessPercent = (state.drowsinessPercent - 5.0f).coerceIn(0f, 100f)
+                drowsinessPercent = (state.drowsinessPercent - reducedScore).coerceIn(0f, 100f)
             )
         }
 
@@ -100,6 +108,7 @@ class DrowsinessTracker{
 
     @OptIn(TransformExperimental::class)
     fun trackMouth(status: CameraAnalyzer.FaceState): DrowsinessState {
+        Log.d("DrowsinessTrackerResult", "status:  ${status}")
         val now = SystemClock.elapsedRealtime()
 
         if(status == CameraAnalyzer.MouthState.YAWN){
@@ -117,7 +126,11 @@ class DrowsinessTracker{
                     }
 
                     lastYawnTimeList.add(now)
-                    state = state.copy(yawnsPer3Min = lastYawnTimeList.size)
+                    val addedPercent = (state.drowsinessPercent + 5.0f).coerceIn(0f, 100f)
+                    lastMouthOpenMs = now
+                    state = state.copy(
+                        yawnsPer3Min = lastYawnTimeList.size,
+                        drowsinessPercent = addedPercent)
                 }
             }
 

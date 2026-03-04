@@ -4,6 +4,7 @@ import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
+import androidx.annotation.StringRes
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.camera.core.CameraSelector
@@ -22,27 +23,25 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.drowseydriver1.ui.theme.Purple80
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
 
-data class DriverStatus(
-    val label: String,
-    val confidence: Int,
-    val detail1: String,
-    val detail2: String,
-)
+enum class UserState(@StringRes val textResId: Int) {
+    AWAKE(R.string.state_awake),
+    SLEEP(R.string.state_sleep),
+    DROWSY(R.string.state_drowsy)
+}
 
 @OptIn(TransformExperimental::class)
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val scope = rememberCoroutineScope()
     val backgroundExecutor = remember { Executors.newSingleThreadExecutor() }
 
     // Camera permission
@@ -83,39 +82,30 @@ fun MainScreen() {
     }
     val facemeshAnalyzer = remember(previewView) { CameraAnalyzer(context, previewView) }
 
+
     // for faceMash sample
-    //val points by facemashAnalyzer.pointsOnPreview.collectAsState()
+    //val points by facemeshAnalyzer.pointsOnPreview.collectAsState()
     val rois by facemeshAnalyzer.roisOnPreview.collectAsState()
 
-    // Status UI state (replace these updates with your model output)
-    var status by remember {
-        mutableStateOf(
-            DriverStatus(
-                label = "Awake",
-                confidence = 94,
-                detail1 = "Eyes closed for 0.3 sec",
-                detail2 = "Yawns 1 time in 3 minutes"
-            )
-        )
-    }
+    // Status UI state
+    val status by facemeshAnalyzer.drowsinessState.collectAsState()
 
     // Alert banner state
     var showBanner by remember { mutableStateOf(false) }
-    var bannerText by remember { mutableStateOf("DROWSINESS DETECTED — Please take a break.") }
 
     // Beep Alert
     val soundPlayer = rememberSoundPlayer(context)
 
     // Example trigger simulator (will be deleted later)
-    LaunchedEffect(Unit) {
-        delay(4000)
-        status = status.copy(detail1 = "Eyes closed for 0.9 sec")
-        triggerBanner(
-            scope = scope,
-            soundPlayer = soundPlayer,
-            onShow = { text -> bannerText = text; showBanner = true },
-            onHide = { showBanner = false }
-        )
+    LaunchedEffect(status) {
+        if (status.drowsinessPercent >= 80f || status.isSleeping) {
+            if (!showBanner) {
+                showBanner = true
+                soundPlayer.play()
+                delay(3000L) // 3초 대기
+                showBanner = false
+            }
+        }
     }
 
     LaunchedEffect(hasCameraPermission, facemeshAnalyzer) {
@@ -136,7 +126,7 @@ fun MainScreen() {
         ) {
             Spacer(Modifier.height(12.dp))
 
-            Text("Driver Status Checker", style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(id = R.string.app_title), style = MaterialTheme.typography.titleLarge)
 
             Spacer(Modifier.height(12.dp))
 
@@ -172,15 +162,28 @@ fun MainScreen() {
             }
 
             Spacer(Modifier.height(18.dp))
+            val translatedLabel = stringResource(id = status.label.textResId)
+            val scoreInt = if (status.label == UserState.AWAKE) {
+                100 - status.drowsinessPercent.toInt()
+            } else {
+                status.drowsinessPercent.toInt()
+            }
+            val closedSec = status.eyesClosedMs / 1000f
 
             // Bottom status text
             Text(
-                "${status.label}  ${status.confidence}%",
+                text = stringResource(id = R.string.status_format, translatedLabel, scoreInt),
                 style = MaterialTheme.typography.displaySmall
             )
             Spacer(Modifier.height(8.dp))
-            Text(status.detail1, style = MaterialTheme.typography.bodyLarge)
-            Text(status.detail2, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = stringResource(id = R.string.detail_eyes_closed, closedSec),
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Text(
+                text = stringResource(id = R.string.detail_yawns, status.yawnsPer3Min),
+                style = MaterialTheme.typography.bodyLarge
+            )
 
             Spacer(Modifier.height(24.dp))
             DebugBitmapPreview(facemeshAnalyzer)
@@ -196,7 +199,7 @@ fun MainScreen() {
                 .fillMaxWidth()
         ) {
             Banner(
-                text = bannerText,
+                text = stringResource(id = R.string.banner_alert),
                 modifier = Modifier
                     .padding(12.dp)
             )
@@ -219,19 +222,3 @@ private fun Banner(text: String, modifier: Modifier = Modifier) {
         )
     }
 }
-
-private fun triggerBanner(
-    scope: kotlinx.coroutines.CoroutineScope,
-    soundPlayer: SoundPlayer,
-    onShow: (String) -> Unit,
-    onHide: () -> Unit,
-    durationMs: Long = 3000L
-) {
-    scope.launch {
-        onShow("DROWSINESS DETECTED — Please take a break.")
-        soundPlayer.play()
-        delay(durationMs)
-        onHide()
-    }
-}
-
